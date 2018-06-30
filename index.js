@@ -97,7 +97,22 @@ class Bus {
 					if (error) {
 						reject(error)
 					}
-					resolve(body)
+
+					let result = JSON.parse(body)
+					if (result instanceof Array) {
+						let obj = result[0]
+						resolve({
+							"terminal": decodeURIComponent(obj.terminal),
+							"stopdis": obj.stopdis,
+							"distance": obj.distance,
+							"time": obj.time,
+							status: 1
+						})
+					} else {
+						resolve({
+							status: 0
+						})
+					}
 				})
 		})
 	}
