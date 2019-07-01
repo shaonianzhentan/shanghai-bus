@@ -1,6 +1,6 @@
 {
   "name": "shanghai-bus",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "上海公交查询",
   "main": "index.js",
   "scripts": {
