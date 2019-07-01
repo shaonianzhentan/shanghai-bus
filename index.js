@@ -1,130 +1,75 @@
-var request = require('request');
-var cheerio = require('cheerio');
-
-var j = request.jar()
-request = request.defaults({
-	jar: j,
-	headers: {
-		'User-Agent': `Mozilla/5.0 (iPhone; CPU iPhone OS 10_3_2 like Mac OS X) AppleWebKit/603.2.4 (KHTML, like Gecko) Mobile/14F89 MicroMessenger/6.5.10 NetType/WIFI Language/zh_CN`
-	}
-})
+const axios = require('axios')
+const parser = require('xml2json')
+axios.defaults.baseURL = 'http://www.shjt.org.cn:8005/bus/TrafficLineXML.aspx'
 
 class Bus {
 	constructor() {
-		this.debug = true
-		this.homepage_url = 'http://shanghaicity.openservice.kankanews.com/'
-		this.query_router_url = 'http://shanghaicity.openservice.kankanews.com/public/bus'
-		this.query_sid_url = 'http://shanghaicity.openservice.kankanews.com/public/bus/get'
-		this.query_router_details_url = 'http://shanghaicity.openservice.kankanews.com/public/bus/mes/sid/'
-		this.query_stop_url = 'http://shanghaicity.openservice.kankanews.com/public/bus/Getstop'
 
-		this.init()
-	}
-
-	init() {
-		// 第一步：加载首页
-		request(this.homepage_url, (error, response, body) => {
-			// 第二步：加载查询页面
-			request({
-				url: this.query_router_url,
-				headers: {
-					Referer: this.homepage_url
-				}
-			}, (error, response, body) => {
-			})
-		})
-	}
-
-	//根据公交车名称查询对应的sid
-	query_sid(router_name) {
-		return new Promise((resolve, reject) => {
-			request.post({ url: this.query_sid_url, form: { idnum: router_name } }, (error, response, body) => {
-				if (error) {
-					reject(error)
-				} else {
-					let obj = JSON.parse(body)
-					resolve(obj.sid)
-				}
-			})
-		})
 	}
 
 	//查询公交详情（direction为方向）
-	query_details(sid, direction = 0) {
-		return new Promise((resolve, reject) => {
-			request(this.query_router_details_url + sid + '/stoptype/' + direction, (error, response, body) => {
-				if (error) {
-					reject(error)
-				} else {
-					let $ = cheerio.load(body)
-					let stations = direction === 0 ? $('div.upgoing.cur') : $('div.downgoing.cur')
-					let s = stations.find('span')
-					let stops = []
-					$('.station').each(function () {
-						let t = $(this)
-						stops.push({
-							stop_id: t.find('.num').eq(0).text(),
-							stop_name: t.find('.name').eq(0).text()
-						})
-					})
-					resolve({
-						'from': s.eq(0).text().trim(),
-						'to': s.eq(1).text().trim(),
-						'start_at': stations.find('em.s').eq(0).text().trim(),
-						'end_at': stations.find('em.m').eq(0).text().trim(),
-						'direction': direction,
-						'stops': stops
-					})
-				}
+	async query_details(busName, direction = 0) {
+		let res = await axios.get(`?TypeID=1&name=${encodeURIComponent(busName)}`)
+		let result = JSON.parse(parser.toJson(res.data))
+		let { line_id, start_stop, end_stop, start_earlytime, start_latetime, end_earlytime, end_latetime } = result.linedetail
+		let from, to, start_at, end_at, stops = [];
+		if (direction === 1) {
+			from = end_stop
+			to = start_stop
+			start_at = end_earlytime
+			end_at = end_latetime
+		} else {
+			from = start_stop
+			to = end_stop
+			start_at = start_earlytime
+			end_at = start_latetime
+		}
+		//请求线路
+		res = await axios.get(`?TypeID=2&lineid=${line_id}&name=${encodeURIComponent(busName)}`)
+		result = JSON.parse(parser.toJson(res.data))
+		result.lineInfoDetails[`lineResults${direction}`].stop.forEach(ele => {
+			stops.push({
+				stop_id: ele.id,
+				stop_name: ele.zdmc
 			})
 		})
+		return {
+			'sid': line_id,
+			'from': from,
+			'to': to,
+			'start_at': start_at,
+			'end_at': end_at,
+			'direction': direction,
+			'stops': stops
+		}
 	}
 
-	query_stop(sid, direction, stop_id) {
-		return new Promise((resolve, reject) => {
-			request({
-				method: 'POST',
-				uri: this.query_stop_url,
-				formData: {
-					'stoptype': direction, 'stopid': stop_id.toString(), 'sid': sid
-				},
-				headers: {
-					'Content-Type': 'application/x-www-form-urlencoded',
-					Referer: this.query_router_details_url + sid + '/stoptype/' + direction,
-				}
-			},
-				(error, response, body) => {
-					if (error) {
-						reject(error)
-					}
-
-					let result = JSON.parse(body)
-					if (result instanceof Array) {
-						let obj = result[0]
-						resolve({
-							"terminal": decodeURIComponent(obj.terminal),
-							"stopdis": obj.stopdis,
-							"distance": obj.distance,
-							"time": obj.time,
-							status: 1
-						})
-					} else {
-						resolve({
-							status: 0
-						})
-					}
-				})
-		})
+	async query_stop(busName, sid, direction, stop_id) {
+		let res = await axios.get(`?TypeID=3&lineid=${sid}&stopid=${stop_id}&direction=${direction}&name=${encodeURIComponent(busName)}`)
+		if (res.data) {
+			let result = JSON.parse(parser.toJson(res.data))
+			let { terminal, stopdis, distance, time } = result.result.cars.car
+			return {
+				"terminal": terminal,
+				"stopdis": stopdis,
+				"distance": distance,
+				"time": time,
+				status: 1
+			}
+		} else {
+			return {
+				status: 0
+			}
+		}
 	}
 }
 
 let bus = new Bus()
 
 module.exports = async function (busName, direction = 0) {
-	let sid = await bus.query_sid(busName)
-	let details = await bus.query_details(sid, direction)
+	let details = await bus.query_details(busName, direction)
 	return {
 		details: details,
-		getStop: async stop_id => await bus.query_stop(sid, direction, `${stop_id}.`)
+		getStop: async stop_id => await bus.query_stop(busName, details.sid, direction, stop_id)
 	}
 }
