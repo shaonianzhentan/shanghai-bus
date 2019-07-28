@@ -1,18 +1,37 @@
-const axios = require('axios')
 const parser = require('xml2json')
-axios.defaults.baseURL = 'http://www.shjt.org.cn:8005/bus/TrafficLineXML.aspx'
+let request = require('request')
+const iconv = require('iconv-lite')
+
+const host = `http://mbst.shdzyb.com:36115/`
 
 class Bus {
 	constructor() {
 
 	}
 
-	//查询公交详情（direction为方向）
-	async query_details(busName, direction = 0) {
-		let res = await axios.get(`?TypeID=1&name=${encodeURIComponent(busName)}`)
-		let result = JSON.parse(parser.toJson(res.data))
+	http(options) {
+		return new Promise((resolve, reject) => {
+			request(options, (err, res, body) => {
+				if (err) {
+					reject(err)
+				} else {
+					resolve(body)
+				}
+			})
+
+		})
+	}
+
+	// 获取线路信息
+	async queryInfo(busName, direction) {
+		let body = await this.http({
+			url: `${host}interface/getBase.ashx?sign=&name=${escape(busName)}`,
+			encoding: null
+		})
+		let result = JSON.parse(parser.toJson(iconv.decode(body, 'gbk')))
+
 		let { line_id, start_stop, end_stop, start_earlytime, start_latetime, end_earlytime, end_latetime } = result.linedetail
-		let from, to, start_at, end_at, stops = [];
+		let from, to, start_at, end_at;
 		if (direction === 1) {
 			from = end_stop
 			to = start_stop
@@ -24,13 +43,29 @@ class Bus {
 			start_at = start_earlytime
 			end_at = start_latetime
 		}
+
+		return {
+			line_id, from, to, start_at, end_at
+		}
+	}
+
+	//查询公交详情（direction为方向）
+	async query_details(busName, direction = 0) {
+
+		// 获取线路信息
+		let { line_id, from, to, start_at, end_at } = await this.queryInfo(busName, direction)
+
 		//请求线路
-		res = await axios.get(`?TypeID=2&lineid=${line_id}&name=${encodeURIComponent(busName)}`)
-		result = JSON.parse(parser.toJson(res.data))
-		result.lineInfoDetails[`lineResults${direction}`].stop.forEach(ele => {
+		let body = await this.http({
+			url: `${host}interface/getStopList.ashx?name=${escape(busName)}&lineid=${line_id}&dir=${direction}`,
+			encoding: null
+		})
+		let result = JSON.parse(iconv.decode(body, 'gbk'))
+		let stops = []
+		result.data.forEach(ele => {
 			stops.push({
 				stop_id: ele.id,
-				stop_name: ele.zdmc
+				stop_name: ele.name
 			})
 		})
 		return {
@@ -45,10 +80,14 @@ class Bus {
 	}
 
 	async query_stop(busName, sid, direction, stop_id) {
-		let res = await axios.get(`?TypeID=3&lineid=${sid}&stopid=${stop_id}&direction=${direction}&name=${encodeURIComponent(busName)}`)
-		if (res.data) {
-			let result = JSON.parse(parser.toJson(res.data))
-			let { terminal, stopdis, distance, time } = result.result.cars.car
+		// 获取到站信息
+		let body = await this.http({
+			url: `${host}interface/getCarmonitor.ashx?name=${escape(busName)}&lineid=${sid}&stopid=${stop_id}&dir=${direction}`,
+			encoding: null
+		})
+		let result = JSON.parse(iconv.decode(body, 'gbk'))
+		let { terminal, stopdis, distance, time } = result.data
+		if (terminal !== 'null' && time !== 'null') {
 			return {
 				"terminal": terminal,
 				"stopdis": stopdis,
